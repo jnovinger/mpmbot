@@ -1,49 +1,23 @@
 """ A simple IRC bot using coleifer's IRCBot library. Returns ticket info from
 Redmine and commit info from Github. """
 
-import httplib
-import httplib2
-from pdb import set_trace ### REMOVE BEFORE COMITTING
-import requests
-import socket
 try:
     import json
 except ImportError:
     import simplejson as json
 
-from irc import IRCBot, run_bot
+from irc import IRCBot, IRCConnection
 
-from settings import (GITHUB_API_KEY, GITHUB_API_USER, GITHUB_URL, GITHUB_USER,
-    REDMINE_FORMAT, REDMINE_API_KEY, REDMINE_URL)
-
-DEBUG = False
+from settings import *
+from util import fetch_content, shorten
 
 class WebAPIError(Exception):
     """ Generic web service error to handle different API call failures """
     pass
 
-if not DEBUG:
-    def set_trace():
-        """ If DEBUG is set to False, redefine set_trace so we don't have to
-        spent time in pdb. """
-        pass
 
-def shorten(msg):
-    """ Shorten to 50 characters, if too long """
-    if len(msg) > 50:
-        msg = msg[0:47] + '...'
-    return msg
-
-class MPMBot(IRCBot):
-    """
-    Subclasses IRCBot to construct a bot that responds to request for commit
-    and ticket information. Queries Redmine instances and Github accounts based
-    on settings.py
-    """
-
-    redmine_url = REDMINE_URL
-    redmine_api_key = REDMINE_API_KEY
-    redmine_format = REDMINE_FORMAT
+class GithubMixin(object):
+    """ IRCBot mixin that provides Github services """
 
     github_api_key = GITHUB_API_KEY
     github_api_user = GITHUB_API_USER
@@ -52,38 +26,14 @@ class MPMBot(IRCBot):
     github_repos = []
     github_credentials = ("%s/token" % GITHUB_API_USER, GITHUB_API_KEY)
 
-    def _fetch_content(self, url, headers):
-        """ Helper method to handle HTTP API calls """
-        http = httplib2.Http(timeout=5)
-
-        try:
-            response, content = http.request(url, "GET", headers=headers)
-        except (socket.error, httplib.error), ex:
-            raise WebAPIError("error accessing web service: %s" % ex)
-
-        if int(response.get('status', '404')) != 200:
-            raise WebAPIError("Got %s while trying to access web service." % response.get('status', '404'))
-
-        return content
-
-    def _fetch_github_content(self, url):
-        """ Github specific helper method to handle HTTP API calls """
-        try:
-            req = requests.get(url, auth=self.github_credentials)
-            if req.status_code != 200:
-                raise WebAPIError("Got %s while trying to access Github." % req.status_code)
-
-            return req.text
-        except Exception, ex:
-            raise WebAPIError("error accessing Github: %s" % ex)
-
+    commit_msg = "Id: %s Committer: %s Date: %s Message: '%s' %s"
+    commits = {}
 
     def _populate_github_repos(self):
         """ Retrieve and populate the local cache of repos """
         url = "%s/api/v2/json/repos/show/%s" % (self.github_url,
             self.github_user)
-        set_trace()
-        content = self._fetch_github_content(url)
+        content = fetch_content(url, credentials=self.github_credentials)
 
         doc = json.loads(content)
         repos = doc.get('repositories', None)
@@ -94,93 +44,136 @@ class MPMBot(IRCBot):
             if name and name not in self.github_repos:
                 self.github_repos.append(name)
 
+    def commit_info(self, sender, message, channel, sha):
+        """ Retrieve commit info from Github, warm up repo cache if need be. """
 
-    def _get_commit_info(self, commit):
-        """ Loop through all repos to find commit, construct msg and return """
-        set_trace()
-        if not self.github_repos:
-            self._populate_github_repos()
+        self.log('looking for commit %s' % sha)
 
-        for repo in self.github_repos:
-            url = "%s/api/v2/json/commits/show/%s/%s/%s" % (self.github_url,
-                self.github_user, repo, commit)
-            try:
-                set_trace()
-                content = self._fetch_github_content(url)
-                set_trace()
-                doc = json.loads(content)
-                commit_rec = doc.get('commit', None)
-                if commit_rec:
-                    login = commit_rec.get('committer', None).get('login', '')
-                    date = commit_rec.get('committed_date', '')
-                    commit_url = commit_rec.get('url', None)
-                    if commit_url:
-                        commit_url = "%s%s" % (self.github_url, commit_url)
-                    msg = shorten(commit_rec.get('message', ''))
-                return "Id: %s Committer: %s Date: %s Message: '%s' %s" % (commit[0:10], login, date, msg, commit_url)
-            except Exception, ex:
-                pass
+        # check our local cache of commit info
+        if sha in self.commits:
+            return "%s: %s" % (sender, self.commits[sha])
 
-
-    def _get_ticket_info(self, number):
-        """ Construct ticket info message and return """
-        url = '%s/issues/%s.%s' % (self.redmine_url, number,
-            self.redmine_format)
-        headers = {'X-Redmine-API-Key': self.redmine_api_key}
-        content = self._fetch_content(url, headers)
-        doc = json.loads(content)
-
-        issue = doc.get('issue', None)
-
-        if issue is None:
-            raise WebAPIError(number)
-
-        status = issue.get('status', None).get('name', '')
-        priority = issue.get('priority', None).get('name', '')
-        subject = shorten(issue.get('subject', ''))
-        tracker = issue.get('tracker', None).get('name', '')
-        ticket_url = '%s/issues/%s' % (self.redmine_url, number)
-
-        return "%s: %s Priority: %s Status: %s Subj: '%s' %s" % (tracker,
-            number, priority, status, subject, ticket_url)
-
-    def commit_info(self, sender, message, channel, commit=None):
-        """ Set reply to sender and handle errors """
-        self.conn.logger.info('looking for commit %s' % commit)
+        reply = None
         try:
-            content = self._get_commit_info(commit)
-            reply = "%s: %s" % (sender, content)
+            if not self.github_repos:
+                self._populate_github_repos()
+
+            for repo in self.github_repos:
+                url = "%s/api/v2/json/commits/show/%s/%s/%s" % (self.github_url,
+                    self.github_user, repo, sha)
+                try:
+                    content = fetch_content(url,
+                        credentials=self.github_credentials)
+                    commit = json.loads(content).get('commit', None)
+                    if commit:
+                        login = commit.get('committer', None).get('login', '')
+                        date = commit.get('committed_date', '')
+                        commit_url = commit.get('url', None)
+                        if commit_url:
+                            commit_url = "%s%s" % (self.github_url, commit_url)
+                        msg = shorten(commit.get('message', ''))
+                    reply = self.commit_msg % (sha[0:10], login,
+                        date, msg, commit_url)
+
+                    # save it to a local cache so we don't waste API calls
+                    self.commits[sha] = reply
+
+                    reply = "%s: %s" % (sender, reply)
+
+                    # got our commit, don't waste API calls
+                    break
+                except Exception, ex:
+                    self.log(ex)
+                    pass
+            if not reply:
+                reply = "%s: could not find %s" % (sender, sha)
         except WebAPIError, ex:
+            self.log(ex)
             reply = "%s: could not find that commit (also: %s)" % (sender, ex)
         except Exception, ex:
+            self.log(ex)
             reply = "Unknown error: %s" % ex
         return reply
 
+class RedmineMixin(object):
+    """ IRCBot mixin that provides Redmine lookup services """
+
+    redmine_url = REDMINE_URL
+    redmine_api_key = REDMINE_API_KEY
+    redmine_format = REDMINE_FORMAT
+
     def ticket_info(self, sender, message, channel, number=None):
         """ Set reply to sender and handle errors """
-        self.conn.logger.info('looking for ticket %s' % number)
+        self.log('looking for ticket %s' % number)
         try:
-            content = self._get_ticket_info(number)
-            reply = '%s: %s' % (sender, content)
+            url = '%s/issues/%s.%s' % (self.redmine_url, number,
+                self.redmine_format)
+            headers = {'X-Redmine-API-Key': self.redmine_api_key}
+            content = fetch_content(url, headers=headers)
+
+            issue = json.loads(content).get('issue', None)
+
+            if issue is None:
+                raise WebAPIError(number)
+
+            status = issue.get('status', None).get('name', '')
+            priority = issue.get('priority', None).get('name', '')
+            subject = shorten(issue.get('subject', ''))
+            tracker = issue.get('tracker', None).get('name', '')
+            ticket_url = '%s/issues/%s' % (self.redmine_url, number)
+
+            reply = "%s: %s: %s Priority: %s Status: %s Subj: '%s' %s" % (
+                sender, tracker, number, priority, status, subject, ticket_url)
+
         except WebAPIError, ex:
+            self.log(ex)
             reply = '%s: could not find ticket %s (also: %s)' % (sender,
                 number, ex)
         except Exception, ex:
+            self.log(ex)
             reply = 'Unknown error: %s' % ex
         return reply
+
+
+class MPMBot(IRCBot, GithubMixin, RedmineMixin):
+    """
+    Subclasses IRCBot to construct a bot that responds to request for commit
+    and ticket information. Queries Redmine instances and Github accounts based
+    on settings.py
+    """
+
+    def __init__(self, start=False):
+        self.conn = IRCConnection(HOST, PORT, NICK)
+
+        self.register_callbacks()
+        if start:
+            self.run()
+
+    def run(self):
+        """ Start the IRC bot and connect to our channels """
+
+        while 1:
+            self.conn.connect()
+
+            channels = CHANNELS or []
+
+            for channel in channels:
+                self.conn.join(channel)
+
+            self.conn.enter_event_loop()
+
+    def log(self, text):
+        """ Shortcut to our logger """
+        self.conn.logger.info(text)
 
     def command_patterns(self):
         """ Define dispatch regexes """
         return(
-            ('.*#(?P<commit>[0-9a-fA-F]{40})', self.commit_info),
-            ('.*#commit (?P<commit>[0-9a-fA-F]{40})', self.commit_info),
+            ('.*#(?P<sha>[0-9a-fA-F]{40})', self.commit_info),
+            ('.*#commit (?P<sha>[0-9a-fA-F]{40})', self.commit_info),
             ('.*#ticket (?P<number>\d{3,})', self.ticket_info),
             ('.*#(?P<number>\d{3,})', self.ticket_info),
         )
 
-HOST = 'irc.freenode.net'
-PORT = 6667
-NICK = 'mpmbot'
-CHANNELS = ['#mpmbot',]
-
-run_bot(MPMBot, HOST, PORT, NICK, CHANNELS)
+if __name__ == '__main__':
+    MPMBot(start=True)
