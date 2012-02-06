@@ -91,15 +91,15 @@ class GithubMixin(IRCBotMixin):
                 pass
             except ValueError, ex:
                 # apparent incomplete json, go ahead and return
-                self.log(ex)
                 reply = "Incomplete response, please try again."
+                self.log("%s: %s" % (reply, ex))
                 break
             except Exception, ex:
-                self.log(ex)
                 reply = "Unknown error: %s" % ex
-
+                self.log(reply)
         if not reply:
             reply = "%s: could not find %s" % (sender, sha)
+            self.log(reply)
         return reply
 
 class RedmineMixin(IRCBotMixin):
@@ -141,12 +141,12 @@ class RedmineMixin(IRCBotMixin):
                 sender, tracker, number, priority, status, subject, ticket_url)
 
         except WebAPIError, ex:
-            self.log(ex)
             reply = '%s: could not find ticket %s (also: %s)' % (sender,
                 number, ex)
+            self.log(reply)
         except Exception, ex:
-            self.log(ex)
             reply = 'Unknown error: %s' % ex
+            self.log(reply)
         return reply
 
 
