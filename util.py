@@ -22,7 +22,3 @@ def truncate(msg, length):
     if len(msg) > length:
         msg = msg[0:length - 3] + '...'
     return msg
-
-#for base in mpmbot.MPMBot.mro():
-#    if base.__name__.endswith('Mixin'):
-#        print base.__name__
