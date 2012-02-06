@@ -17,10 +17,10 @@ def fetch_content(url, headers=None, credentials=None):
     except Exception, ex:
         raise WebAPIError("error accessing Github: %s" % ex)
 
-def shorten(msg):
-    """ Shorten to 50 characters, if too long """
-    if len(msg) > 50:
-        msg = msg[0:47] + '...'
+def truncate(msg, length):
+    """ Shorten to <length> characters, if too long """
+    if len(msg) > length:
+        msg = msg[0:length - 3] + '...'
     return msg
 
 #for base in mpmbot.MPMBot.mro():

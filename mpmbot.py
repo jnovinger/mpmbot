@@ -9,18 +9,16 @@ except ImportError:
 from irc import IRCBot, IRCConnection
 
 from settings import *
-from util import fetch_content, shorten
+from util import fetch_content, truncate, WebAPIError
 
-class WebAPIError(Exception):
-    """ Generic web service error to handle different API call failures """
+class IRCBotMixin(object):
+    """ Base class for IRCBot mixins """
     pass
 
+class GithubMixin(IRCBotMixin):
+    """ IRCBot mixin that provides Github services, currently uses Github v2
+    API, should be upgraded to use v3 """
 
-class GithubMixin(object):
-    """ IRCBot mixin that provides Github services """
-
-    github_api_key = GITHUB_API_KEY
-    github_api_user = GITHUB_API_USER
     github_url = GITHUB_URL
     github_user = GITHUB_USER
     github_repos = []
@@ -28,6 +26,13 @@ class GithubMixin(object):
 
     commit_msg = "Id: %s Committer: %s Date: %s Message: '%s' %s"
     commits = {}
+
+    def github_command_patterns(self):
+        """ Define command patterns for this mixin """
+        return (
+            ('.*#(?P<sha>[0-9a-fA-F]{40})', self.commit_info),
+            ('.*#commit (?P<sha>[0-9a-fA-F]{40})', self.commit_info),
+        )
 
     def _populate_github_repos(self):
         """ Retrieve and populate the local cache of repos """
@@ -54,53 +59,63 @@ class GithubMixin(object):
             return "%s: %s" % (sender, self.commits[sha])
 
         reply = None
-        try:
-            if not self.github_repos:
-                self._populate_github_repos()
 
-            for repo in self.github_repos:
-                url = "%s/api/v2/json/commits/show/%s/%s/%s" % (self.github_url,
-                    self.github_user, repo, sha)
-                try:
-                    content = fetch_content(url,
-                        credentials=self.github_credentials)
-                    commit = json.loads(content).get('commit', None)
-                    if commit:
-                        login = commit.get('committer', None).get('login', '')
-                        date = commit.get('committed_date', '')
-                        commit_url = commit.get('url', None)
-                        if commit_url:
-                            commit_url = "%s%s" % (self.github_url, commit_url)
-                        msg = shorten(commit.get('message', ''))
-                    reply = self.commit_msg % (sha[0:10], login,
-                        date, msg, commit_url)
+        if not self.github_repos:
+            self._populate_github_repos()
 
-                    # save it to a local cache so we don't waste API calls
-                    self.commits[sha] = reply
+        for repo in self.github_repos:
+            url = "%s/api/v2/json/commits/show/%s/%s/%s" % (self.github_url,
+                self.github_user, repo, sha)
+            try:
+                content = fetch_content(url,
+                    credentials=self.github_credentials)
+                commit = json.loads(content).get('commit', None)
+                if commit:
+                    login = commit.get('committer', None).get('login', '')
+                    date = commit.get('committed_date', '')
+                    commit_url = commit.get('url', None)
+                    if commit_url:
+                        commit_url = "%s%s" % (self.github_url, commit_url)
+                    msg = truncate(commit.get('message', ''), 50)
+                reply = self.commit_msg % (sha[0:10], login,
+                    date, msg, commit_url)
 
-                    reply = "%s: %s" % (sender, reply)
+                # save it to a local cache so we don't waste API calls
+                self.commits[sha] = reply
 
-                    # got our commit, don't waste API calls
-                    break
-                except Exception, ex:
-                    self.log(ex)
-                    pass
-            if not reply:
-                reply = "%s: could not find %s" % (sender, sha)
-        except WebAPIError, ex:
-            self.log(ex)
-            reply = "%s: could not find that commit (also: %s)" % (sender, ex)
-        except Exception, ex:
-            self.log(ex)
-            reply = "Unknown error: %s" % ex
+                reply = "%s: %s" % (sender, reply)
+
+                # got our commit, don't waste API calls
+                break
+            except WebAPIError, ex:
+                pass
+            except ValueError, ex:
+                # apparent incomplete json, go ahead and return
+                self.log(ex)
+                reply = "Incomplete response, please try again."
+                break
+            except Exception, ex:
+                self.log(ex)
+                reply = "Unknown error: %s" % ex
+
+        if not reply:
+            reply = "%s: could not find %s" % (sender, sha)
         return reply
 
-class RedmineMixin(object):
+class RedmineMixin(IRCBotMixin):
     """ IRCBot mixin that provides Redmine lookup services """
 
     redmine_url = REDMINE_URL
     redmine_api_key = REDMINE_API_KEY
     redmine_format = REDMINE_FORMAT
+
+    def redmine_command_patterns(self):
+        """ Define command patterns for this mixin """
+        return (
+            ('.*#ticket (?P<number>\d{3,})', self.ticket_info),
+            ('.*#(?P<number>\d{3,})', self.ticket_info),
+        )
+
 
     def ticket_info(self, sender, message, channel, number=None):
         """ Set reply to sender and handle errors """
@@ -118,7 +133,7 @@ class RedmineMixin(object):
 
             status = issue.get('status', None).get('name', '')
             priority = issue.get('priority', None).get('name', '')
-            subject = shorten(issue.get('subject', ''))
+            subject = truncate(issue.get('subject', ''), 50)
             tracker = issue.get('tracker', None).get('name', '')
             ticket_url = '%s/issues/%s' % (self.redmine_url, number)
 
@@ -168,12 +183,16 @@ class MPMBot(IRCBot, GithubMixin, RedmineMixin):
 
     def command_patterns(self):
         """ Define dispatch regexes """
-        return(
-            ('.*#(?P<sha>[0-9a-fA-F]{40})', self.commit_info),
-            ('.*#commit (?P<sha>[0-9a-fA-F]{40})', self.commit_info),
-            ('.*#ticket (?P<number>\d{3,})', self.ticket_info),
-            ('.*#(?P<number>\d{3,})', self.ticket_info),
-        )
+        patterns = ()
+
+        for base in MPMBot.mro():
+            if issubclass(base, IRCBotMixin):
+                func = '%s_command_patterns' % base.__name__[0:-5].lower()
+                if hasattr(self, func):
+                    func = getattr(self, func, None)
+                    patterns += (func())
+
+        return patterns
 
 if __name__ == '__main__':
     MPMBot(start=True)
