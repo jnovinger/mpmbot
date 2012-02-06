@@ -1,5 +1,10 @@
 import requests
 
+
+class WebAPIError(Exception):
+    """ Generic web service error to handle different API call failures """
+    pass
+
 def fetch_content(url, headers=None, credentials=None):
     """ Github specific helper method to handle HTTP API calls """
     try:
@@ -17,3 +22,7 @@ def shorten(msg):
     if len(msg) > 50:
         msg = msg[0:47] + '...'
     return msg
+
+#for base in mpmbot.MPMBot.mro():
+#    if base.__name__.endswith('Mixin'):
+#        print base.__name__
