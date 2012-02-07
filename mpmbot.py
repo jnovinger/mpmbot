@@ -30,6 +30,7 @@ class GithubMixin(IRCBotMixin):
     def github_command_patterns(self):
         """ Define command patterns for this mixin """
         return (
+            ('.*#pull (?P<repo>\w+) (?P<pull>\d+)', self.pull_request_info),
             ('.*#(?P<sha>[0-9a-fA-F]{40})', self.commit_info),
             ('.*#commit (?P<sha>[0-9a-fA-F]{40})', self.commit_info),
         )
@@ -48,6 +49,11 @@ class GithubMixin(IRCBotMixin):
             # weird getting some repos multiple times, distinct it
             if name and name not in self.github_repos:
                 self.github_repos.append(name)
+
+    def pull_request_info(self, sender, message, channel, repo, pull):
+        self.log('looking for pull request %s in %s repo' % (pull, repo))
+        link_url = 'https://github.com/Mediaphormedia/%s/pull/%s' % (repo, pull)
+        return link_url
 
     def commit_info(self, sender, message, channel, sha):
         """ Retrieve commit info from Github, warm up repo cache if need be. """
