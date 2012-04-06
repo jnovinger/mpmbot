@@ -163,16 +163,18 @@ class TalkbackMixin(IRCBotMixin):
         "Yo %s, you got it.",
         "%s, a robot must obey the orders given to it by human beings, except where such orders would conflict with the First Law.",
         "%s, bite my shiny metal base class.",
+        "%s, LINK ALL THE THINGS!",
+        "%s, http://alltheragefaces.com/img/faces/large/happy-oh-stop-it-you-l.png",
     ]
 
     def talkback_command_patterns(self):
         """ Define command patterns for this mixin """
-        prompts = ['thanks', 'Thanks', 'awesome']
-
+        prompts = ['thanks', 'Thanks', 'awesome', 'rock']
 
         patterns = ()
         for prompt in prompts:
-            patterns += self.ping(prompt, self.welcome),
+            patterns += ("%s.*%s" % (prompt, self.conn.nick), self.welcome),
+            patterns += ("%s.*%s" % (self.conn.nick, prompt), self.welcome),
 
         return patterns
 
