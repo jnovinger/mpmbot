@@ -1,6 +1,7 @@
 """ A simple IRC bot using coleifer's IRCBot library. Returns ticket info from
 Redmine and commit info from Github. """
 
+import random
 try:
     import json
 except ImportError:
@@ -122,7 +123,6 @@ class RedmineMixin(IRCBotMixin):
             ('.*#(?P<number>\d{3,})', self.ticket_info),
         )
 
-
     def ticket_info(self, sender, message, channel, number=None):
         """ Set reply to sender and handle errors """
         self.log('looking for ticket %s' % number)
@@ -156,7 +156,32 @@ class RedmineMixin(IRCBotMixin):
         return reply
 
 
-class MPMBot(IRCBot, GithubMixin, RedmineMixin):
+class TalkbackMixin(IRCBotMixin):
+
+    welcome_strings = [
+        "Hey %s, anytime!",
+        "Yo %s, you got it.",
+        "%s, a robot must obey the orders given to it by human beings, except where such orders would conflict with the First Law.",
+        "%s, bite my shiny metal base class.",
+    ]
+
+    def talkback_command_patterns(self):
+        """ Define command patterns for this mixin """
+        prompts = ['thanks', 'Thanks', 'awesome']
+
+
+        patterns = ()
+        for prompt in prompts:
+            patterns += self.ping(prompt, self.welcome),
+
+        return patterns
+
+    def welcome(self, nick, message, channel):
+        index = random.randint(0, len(self.welcome_strings) - 1)
+        return self.welcome_strings[index] % nick
+
+
+class MPMBot(IRCBot, GithubMixin, RedmineMixin, TalkbackMixin):
     """
     Subclasses IRCBot to construct a bot that responds to request for commit
     and ticket information. Queries Redmine instances and Github accounts based
