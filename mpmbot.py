@@ -166,6 +166,7 @@ class TalkbackMixin(IRCBotMixin):
         "%s, LINK ALL THE THINGS!",
         "%s, http://alltheragefaces.com/img/faces/large/happy-oh-stop-it-you-l.png",
         "%s, just because you put syrup on it, doesn't make it a pancake.",
+        "%s, I am excited like it's free bacon day at the baconarium.",
     ]
 
     def talkback_command_patterns(self):
